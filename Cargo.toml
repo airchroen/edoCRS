@@ -1,0 +1,49 @@
+[package]
+name = "edocrs"
+version = "0.1.0"
+edition = "2024"
+description = "A demo Claude Code-style agent CLI in Rust, backed by DeepSeek V4"
+license = "GPL-3.0"
+
+[[bin]]
+name = "edocrs"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+
+# HTTP + 流式
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+bytes = "1"
+async-stream = "0.3"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# CLI 参数
+clap = { version = "4", features = ["derive"] }
+
+# 错误
+thiserror = "1"
+anyhow = "1"
+
+# 终端
+crossterm = "0.27"
+rustyline = "14"
+
+# 工具
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
+dotenvy = "0.15"
+similar = "2"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"

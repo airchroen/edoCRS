@@ -1,0 +1,8 @@
+# 复制到 ~/.config/edocrs/config.toml 后改你需要的字段.
+# api_key 与 base_url 也可放到 .env, 优先级高于此文件.
+
+# api_key = "sk-..."
+# base_url = "https://api.deepseek.com"
+# model = "deepseek-v4-flash"
+# max_tool_output_bytes = 50000
+# session_dir = "~/.local/share/edocrs/sessions"

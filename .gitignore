@@ -1,0 +1,26 @@
+# Build artifacts
+/target
+/debug
+/release
+*.exe
+*.so
+*.rlib
+*.dylib
+
+# Environment
+/.env
+Cargo.lock
+
+# Editor
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Agent
+/.agent
+/.claude
+/.codex
+
+# Docs
+/docs
