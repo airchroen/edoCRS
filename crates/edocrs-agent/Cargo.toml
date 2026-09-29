@@ -1,0 +1,9 @@
+[package]
+name = "edocrs-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "edoCRS agent core: loop, tools, hooks, events, steer/follow-up queues"
+
+[dependencies]
+edocrs-ai = { path = "../edocrs-ai" }

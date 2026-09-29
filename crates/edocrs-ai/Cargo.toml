@@ -1,0 +1,8 @@
+[package]
+name = "edocrs-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "edoCRS model access: provider registry and OpenAI Chat Completions streaming"
+
+[dependencies]

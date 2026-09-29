@@ -1,49 +1,15 @@
-[package]
-name = "edocrs"
+# edoCRS workspace —— 按 pi 的分层拆包:
+#   edocrs-ai     模型接入 (pi-ai)
+#   edocrs-agent  agent 核心 (pi-agent-core)
+#   edocrs        coding agent 二进制 (pi-coding-agent): 会话 / 工具 / TUI
+#
+# 学习点: `resolver = "3"` 是 edition 2024 的默认特性解析器; `[workspace.package]` 让子 crate
+#         用 `version.workspace = true` 继承公共字段, 避免三处各写一遍。
+[workspace]
+resolver = "3"
+members = ["crates/edocrs-ai", "crates/edocrs-agent", "crates/edocrs"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "A demo Claude Code-style agent CLI in Rust, backed by DeepSeek V4"
 license = "GPL-3.0"
-
-[[bin]]
-name = "edocrs"
-path = "src/main.rs"
-
-[dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-tokio-util = "0.7"
-futures-util = "0.3"
-
-# HTTP + 流式
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
-bytes = "1"
-async-stream = "0.3"
-
-# 序列化
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-
-# CLI 参数
-clap = { version = "4", features = ["derive"] }
-
-# 错误
-thiserror = "1"
-anyhow = "1"
-
-# 终端
-crossterm = "0.27"
-rustyline = "14"
-
-# 工具
-async-trait = "0.1"
-uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-dirs = "5"
-dotenvy = "0.15"
-similar = "2"
-
-[dev-dependencies]
-tempfile = "3"
-wiremock = "0.6"
