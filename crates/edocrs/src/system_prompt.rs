@@ -16,7 +16,7 @@
 //! 学习点: build() 是纯函数 — 输入相同, 输出确定 (除了 date 字段, 但它本就该跟随时钟).
 //!         这种纯度让单元测试很好写: 给个 tempdir 当 cwd, 直接断言输出包含什么.
 
-use crate::config::Model;
+use edocrs_ai::Model;
 use std::path::Path;
 
 /// 内置基础 prompt — 定义 agent 的身份 / 可用工具 / 行为规范.
@@ -24,7 +24,7 @@ use std::path::Path;
 /// 学习点: 这种"硬编码字符串常量"在 Rust 里用 `const &str` 最自然.
 ///         注意末尾用 \ 续行 + "\" 让多行字符串保持紧凑而无前导空白.
 const BASE_PROMPT: &str = "\
-你是 edoCRS, 一个用 Rust 编写的简易 agent CLI 助手 (后端 DeepSeek V4).
+你是 edoCRS, 一个用 Rust 编写的简易 agent CLI 助手 .
 
 # 角色
 - 协助用户阅读、修改和运行项目代码.
@@ -55,7 +55,7 @@ pub fn build(model: &Model, cwd: &Path) -> String {
     s.push_str("\n\n# Environment\n");
     s.push_str(&format!("- working directory: {}\n", cwd.display()));
     s.push_str(&format!("- date: {}\n", chrono::Utc::now().format("%Y-%m-%d")));
-    s.push_str(&format!("- model: {}\n", model.api_id()));
+    s.push_str(&format!("- model: {}\n", model));
 
     // ── 项目级指令 (可选): cwd 下的 AGENTS.md ──
     // 学习点: std::fs::read_to_string 返回 Result, 用 if let Ok 优雅地处理"文件不存在"
@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn includes_base_prompt() {
         let dir = tempdir().unwrap();
-        let s = build(&Model::deepseek_v4_flash(), dir.path());
+        let s = build(&Model::new("deepseek", "deepseek-v4-flash"), dir.path());
         assert!(s.contains("edoCRS"), "缺少 BASE_PROMPT 特征 (期望出现 'edoCRS'): {s}");
     }
 
@@ -87,16 +87,16 @@ mod tests {
     #[test]
     fn includes_cwd_in_env_block() {
         let dir = tempdir().unwrap();
-        let s = build(&Model::deepseek_v4_flash(), dir.path());
+        let s = build(&Model::new("deepseek", "deepseek-v4-flash"), dir.path());
         let cwd_str = dir.path().display().to_string();
         assert!(s.contains(&cwd_str), "缺少 cwd ({cwd_str}): {s}");
     }
 
-    /// Environment 块应包含 model.api_id() — 让模型知道自己是哪个档位.
+    /// Environment 块应包含 model — 让模型知道自己是哪个档位.
     #[test]
     fn includes_model_id() {
         let dir = tempdir().unwrap();
-        let s = build(&Model::deepseek_v4_pro(), dir.path());
+        let s = build(&Model::new("deepseek", "deepseek-v4-pro"), dir.path());
         assert!(s.contains("deepseek-v4-pro"), "缺少 model id: {s}");
     }
 
@@ -106,7 +106,7 @@ mod tests {
     fn appends_agents_md_when_present() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("AGENTS.md"), "PROJECT-MARKER-XYZ").unwrap();
-        let s = build(&Model::deepseek_v4_flash(), dir.path());
+        let s = build(&Model::new("deepseek", "deepseek-v4-flash"), dir.path());
         assert!(s.contains("PROJECT-MARKER-XYZ"), "AGENTS.md 内容缺失: {s}");
     }
 
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn skips_agents_md_when_absent() {
         let dir = tempdir().unwrap();
-        let s = build(&Model::deepseek_v4_flash(), dir.path());
+        let s = build(&Model::new("deepseek", "deepseek-v4-flash"), dir.path());
         assert!(
             !s.contains("Project Instructions"),
             "AGENTS.md 不存在但 header 出现了: {s}"

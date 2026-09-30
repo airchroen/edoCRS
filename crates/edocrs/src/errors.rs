@@ -14,8 +14,9 @@ use thiserror::Error;
 /// 顶层应用错误. main.rs 捕获这一层, 用红字打印后 exit 1.
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("API 错误: {0}")]
-    Api(#[from] ApiError),
+    /// 模型接入层错误 (HTTP / 网络 / 缺 key / 流解析...), 来自 `edocrs-ai`。
+    #[error("模型调用失败: {0}")]
+    Api(#[from] edocrs_ai::AiError),
 
     #[error("工具错误: {0}")]
     Tool(#[from] ToolError),
@@ -28,33 +29,6 @@ pub enum AppError {
 
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-}
-
-/// API 层错误 (HTTP / 网络 / 流解析).
-#[derive(Debug, Error)]
-pub enum ApiError {
-    #[error("HTTP {status}: {body}")]
-    Http { status: u16, body: String },
-
-    #[error("网络错误: {0}")]
-    Network(#[from] reqwest::Error),
-
-    #[error("SSE 流解析失败: {0}")]
-    BadStream(String),
-
-    #[error("被速率限制 (HTTP 429), 请稍后重试")]
-    RateLimit,
-
-    #[error("采样空闲超时 ({0:?})")]
-    IdleTimeout(std::time::Duration),
-
-    /// 预留: 细粒度「流式中途取消」接入后使用 (当前只有 turn 边界取消)。
-    #[allow(dead_code)]
-    #[error("请求被取消")]
-    Cancelled,
-
-    #[error("反序列化响应失败: {0}")]
-    BadJson(#[from] serde_json::Error),
 }
 
 /// 工具执行错误.
@@ -106,11 +80,12 @@ mod tests {
         assert!(s.to_lowercase().contains("io") || s.contains("No such file"));
     }
 
-    /// 测试 ApiError::RateLimit 的 Display.
+    /// AiError 应能经 `?` 自动升成 AppError (依赖方向: edocrs 知道 edocrs-ai, 反之不然)。
     #[test]
-    fn rate_limit_display_is_human_friendly() {
-        let e = ApiError::RateLimit;
-        let s = format!("{e}");
-        assert!(s.contains("429") || s.contains("速率") || s.to_lowercase().contains("rate"));
+    fn ai_error_converts_into_app_error() {
+        fn inner() -> Result<(), AppError> {
+            Err(edocrs_ai::AiError::RateLimit)?
+        }
+        assert!(matches!(inner(), Err(AppError::Api(edocrs_ai::AiError::RateLimit))));
     }
 }

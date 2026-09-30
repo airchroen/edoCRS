@@ -2,29 +2,30 @@
 //! 负责: 解析 CLI -> 加载 config -> 注册工具 -> 装配 Agent + REPL -> 运行.
 
 mod agent;
-mod api;
 mod cli;
 mod config;
 mod errors;
 mod event;
 mod permission;
 mod repl;
-mod sampler;
 mod session;
 mod session_actor;
 mod system_prompt;
+#[cfg(test)]
+mod test_support;
 mod tools;
 mod ui;
 
 use crate::agent::Agent;
 use crate::cli::Cli;
-use crate::config::Config;
+use crate::config::{CliOverrides, Config};
 use crate::errors::AppError;
 use crate::permission::PermissionGate;
 use crate::repl::Repl;
 use crate::session::Session;
 use crate::tools::Registry;
 use clap::Parser;
+use edocrs_ai::{Sampler, SamplerConfig};
 use std::cell::RefCell;
 
 #[tokio::main]
@@ -38,46 +39,40 @@ async fn main() {
 async fn run() -> Result<(), AppError> {
     let args = Cli::parse();
 
-    // 多源 config 加载 (.env + config.toml + 默认), CLI flag 后续覆盖.
-    let mut cfg = Config::load()?;
+    // cwd: --cwd 优先。之后整个会话期 working_dir 不变 (即便用户在 REPL 中 `cd` 也不影响)。
+    let cwd = match args.cwd {
+        Some(p) => p.canonicalize().map_err(|e| AppError::Config(format!("--cwd 无效: {e}")))?,
+        None => std::env::current_dir()
+            .map_err(|e| AppError::Config(format!("无法获取 cwd: {e}")))?,
+    };
 
-    if let Some(k) = args.api_key {
-        cfg.api_key = k;
-    }
-    if let Some(u) = args.base_url {
-        cfg.base_url = u;
-    }
-    if let Some(m) = args.model {
-        // 复用 Model::parse 的合法性校验 (支持内置两档 + provider/id 语法).
-        cfg.model = config::Model::parse(&m)?;
-    }
+    // 分层加载: .env + 全局/项目 settings.json + 环境变量 + CLI。
+    // 项目信任 (spec §8) 要到阶段 7 才有 UI, 此前项目层 settings 一律不读 (安全默认)。
+    let cfg = Config::load(
+        &cwd,
+        false,
+        CliOverrides { model: args.model, mode: args.mode.map(Into::into) },
+    )?;
 
     // 工具注册表
     let mut registry = Registry::new();
     registry.register(Box::new(tools::read_file::ReadFile {
-        max_bytes: cfg.max_tool_output_bytes,
+        max_bytes: cfg.max_output_bytes,
     }));
     registry.register(Box::new(tools::write_file::WriteFile));
     registry.register(Box::new(tools::bash::Bash {
-        max_bytes: cfg.max_tool_output_bytes,
+        max_bytes: cfg.max_output_bytes,
+        default_timeout_secs: cfg.bash_timeout_secs,
     }));
 
     // Agent
     let agent = Agent {
-        sampler: sampler::build(
-            cfg.api_key.clone(),
-            cfg.base_url.clone(),
-            &cfg.model,
-            sampler::SamplerConfig::default(),
-        ),
+        sampler: Sampler::new(cfg.registry.clone(), SamplerConfig::default()),
         registry,
-        // 学习点: gate 现在包在 RefCell 里 —— actor 化后 Agent 只被 `&self` 借用,
+        // 学习点: gate 包在 RefCell 里 —— actor 化后 Agent 只被 `&self` 借用,
         //         权限缓存的可变性下沉到字段级。
-        gate: RefCell::new(PermissionGate::new(args.yolo)),
-        // 学习点: 在 main 里一次拿到 cwd, 之后整个会话期 working_dir 不变 — 即便用户
-        //         在 REPL 中 `cd` 也不影响 (REPL 没暴露 cd, 这里更多是为了行为可预测).
-        working_dir: std::env::current_dir()
-            .map_err(|e| AppError::Config(format!("无法获取 cwd: {e}")))?,
+        gate: RefCell::new(PermissionGate::new(cfg.permission_mode)),
+        working_dir: cwd,
         hunk_tracker: RefCell::new(session::checkpoint::HunkTracker::new()),
     };
 
@@ -85,7 +80,14 @@ async fn run() -> Result<(), AppError> {
     let tool_schemas = agent.registry.schemas();
 
     // 加载 / 新建 Session
-    let session = match args.resume.as_deref() {
+    // -c 与 `--resume` (不带 id) 都是「最近一次」; `--resume <id>` 精确恢复。
+    let resume_target: Option<String> = match args.resume {
+        Some(Some(id)) => Some(id),
+        Some(None) => Some("last".into()),
+        None if args.continue_last => Some("last".into()),
+        None => None,
+    };
+    let session = match resume_target.as_deref() {
         Some("last") => match Session::most_recent_id(&cfg.session_dir).await? {
             Some(id) => Session::load(&cfg.session_dir, &id)?,
             None => Session::new(cfg.model.clone(), &cfg.session_dir)?,
@@ -94,7 +96,7 @@ async fn run() -> Result<(), AppError> {
         None => Session::new(cfg.model.clone(), &cfg.session_dir)?,
     };
 
-    ui::banner(env!("CARGO_PKG_VERSION"), cfg.model.api_id(), &session.id.to_string());
+    ui::banner(env!("CARGO_PKG_VERSION"), &cfg.model.to_string(), &session.id.to_string());
 
     // 装配会话 actor + REPL 客户端。
     // 学习点: SessionActor 用 Rc/RefCell (非 Send), 只能跑在单线程 LocalSet 上 ——

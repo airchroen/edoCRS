@@ -9,16 +9,16 @@ use tokio::process::Command;
 
 pub struct Bash {
     pub max_bytes: usize,
+    /// 模型没传 `timeout_secs` 时使用的默认超时 (来自 settings 的 `tools.bash_timeout_secs`)。
+    pub default_timeout_secs: u64,
 }
 
 #[derive(Deserialize)]
 struct Args {
     command: String,
-    #[serde(default = "default_timeout")]
-    timeout_secs: u64,
+    /// 缺省时为 None, 由工具用配置的默认值兜底 (serde 对 Option 字段缺省即 None)。
+    timeout_secs: Option<u64>,
 }
-
-fn default_timeout() -> u64 { 30 }
 
 #[async_trait]
 impl Tool for Bash {
@@ -29,12 +29,12 @@ impl Tool for Bash {
             "type": "function",
             "function": {
                 "name": "bash",
-                "description": "用 bash -c 执行命令. stdout 与 stderr 合并返回. 默认 30s 超时.",
+                "description": "用 bash -c 执行命令. stdout 与 stderr 合并返回. 缺省超时由配置决定 (默认 30s).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "command": {"type": "string"},
-                        "timeout_secs": {"type": "integer", "default": 30}
+                        "timeout_secs": {"type": "integer", "description": "超时秒数; 缺省用配置的默认值"}
                     },
                     "required": ["command"]
                 }
@@ -50,6 +50,7 @@ impl Tool for Bash {
 
         // 学习点: tokio::process 是 std::process 的异步版.
         //         我们用 -c 把整条命令交给 bash 解释 (支持管道 / 重定向).
+        let timeout_secs = args.timeout_secs.unwrap_or(self.default_timeout_secs);
         let mut cmd = Command::new("bash");
         cmd.arg("-c").arg(&args.command);
         cmd.stdout(std::process::Stdio::piped());
@@ -59,9 +60,9 @@ impl Tool for Bash {
         // 学习点: tokio::time::timeout 把任意 future 包成"在 X 时间内完成或超时".
         //         超时后 tokio 会 drop 内部 future, 但子进程不一定立刻死掉
         //         (操作系统侧可能继续跑直到自己 exit). 学习项目接受这个限制.
-        let output = tokio::time::timeout(Duration::from_secs(args.timeout_secs), fut)
+        let output = tokio::time::timeout(Duration::from_secs(timeout_secs), fut)
             .await
-            .map_err(|_| ToolError::Timeout(args.timeout_secs))?
+            .map_err(|_| ToolError::Timeout(timeout_secs))?
             .map_err(|e| ToolError::Failed(format!("启动失败: {e}")))?;
 
         let mut combined = String::new();
@@ -86,7 +87,7 @@ mod tests {
 
     #[tokio::test]
     async fn executes_simple_command() {
-        let tool = Bash { max_bytes: 10_000 };
+        let tool = Bash { max_bytes: 10_000, default_timeout_secs: 30 };
         let args = r#"{"command":"echo hello world"}"#;
         let out = tool.execute(args).await.unwrap();
         assert!(out.contains("hello world"));
@@ -94,7 +95,7 @@ mod tests {
 
     #[tokio::test]
     async fn captures_stderr() {
-        let tool = Bash { max_bytes: 10_000 };
+        let tool = Bash { max_bytes: 10_000, default_timeout_secs: 30 };
         // 学习点: 1>&2 把 stdout 重定向到 stderr, 所以 to-err 会出现在 stderr.
         let args = r#"{"command":"echo to-err 1>&2; echo to-out"}"#;
         let out = tool.execute(args).await.unwrap();
@@ -104,7 +105,7 @@ mod tests {
 
     #[tokio::test]
     async fn enforces_timeout() {
-        let tool = Bash { max_bytes: 10_000 };
+        let tool = Bash { max_bytes: 10_000, default_timeout_secs: 30 };
         let args = r#"{"command":"sleep 5", "timeout_secs":1}"#;
         let res = tool.execute(args).await;
         assert!(matches!(res, Err(ToolError::Timeout(1))));

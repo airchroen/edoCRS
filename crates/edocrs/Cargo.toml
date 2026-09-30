@@ -10,7 +10,7 @@ name = "edocrs"
 path = "src/main.rs"
 
 [dependencies]
-# workspace 内部分层 (阶段 0 先挂上依赖, 后续阶段逐步把代码迁入)
+# workspace 内部分层
 edocrs-ai = { path = "../edocrs-ai" }
 edocrs-agent = { path = "../edocrs-agent" }
 
@@ -19,15 +19,11 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 futures-util = "0.3"
 
-# HTTP + 流式
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
-bytes = "1"
-async-stream = "0.3"
-
 # 序列化
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+# settings.json 是 JSONC (带注释/尾逗号的 JSON), json5 是它的超集解析器
+json5 = "1"
 
 # CLI 参数
 clap = { version = "4", features = ["derive"] }

@@ -1,0 +1,43 @@
+// 复制到 ~/.edocrs/agent/settings.json (或项目的 .edocrs/settings.json) 后按需修改。
+// 格式是 JSONC: 允许 // 和 /* */ 注释以及尾逗号。所有字段都可省略。
+{
+  // 模型写作 "provider/model-id", 按第一个 "/" 切分。没有内置默认值, 必须在这里、
+  // 环境变量 EDOCRS_MODEL 或 --model 三处之一给出。
+  "default_model": "deepseek/deepseek-v4-flash",
+
+  // ask: write / edit / bash 都询问; auto-edit: write / edit 自动放行, bash 仍然询问。
+  "permission_mode": "ask",
+
+  // 全局默认上下文窗口 (token)。
+  "context_window": 128000,
+
+  // 追加或覆盖 provider。内置: openai / openrouter / deepseek / ollama。
+  "providers": {
+    // 覆盖内置预设: 只写要改的字段。
+    // "openai": { "base_url": "https://my-proxy.example.com/v1" },
+
+    // 追加自定义 provider (必须给 base_url)。key 从环境变量读, 或用 api_key 直接写字面量。
+    // "my-gateway": {
+    //   "base_url": "http://localhost:8000/v1",
+    //   "api_key_env": "MY_GATEWAY_KEY",
+    //   "context_window": 32000,
+    // },
+  },
+
+  // 按模型覆盖上下文窗口, key 是 "provider/model-id"。
+  "models": {
+    // "openrouter/anthropic/claude-sonnet-4": { "context_window": 200000 },
+  },
+
+  "compaction": {
+    "enabled": true,
+    "reserve_tokens": 16384,
+    "keep_recent_tokens": 20000,
+    // "model_overrides": { "ollama/llama3": { "reserve_tokens": 4096 } },
+  },
+
+  "tools": {
+    "max_output_bytes": 50000,
+    "bash_timeout_secs": 30,
+  },
+}

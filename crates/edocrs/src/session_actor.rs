@@ -262,8 +262,8 @@ pub fn spawn(agent: Agent, session: Session, session_dir: PathBuf) -> (SessionHa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Message;
-    use crate::config::Model;
+    use edocrs_ai::Message;
+    use crate::test_support::{test_model, test_sampler};
     use crate::permission::PermissionGate;
     use crate::tools::Registry;
     use wiremock::matchers::{method, path};
@@ -272,14 +272,9 @@ mod tests {
     /// 构造一个指向 mock server 的 Agent (无工具)。
     fn test_agent(uri: String) -> Agent {
         Agent {
-            sampler: crate::sampler::build(
-                "sk-test".into(),
-                uri,
-                &Model::deepseek_v4_flash(),
-                crate::sampler::SamplerConfig::default(),
-            ),
+            sampler: test_sampler(uri),
             registry: Registry::new(),
-            gate: RefCell::new(PermissionGate::new(false)),
+            gate: RefCell::new(PermissionGate::new(crate::config::PermissionMode::Ask)),
             working_dir: std::env::temp_dir(),
             hunk_tracker: RefCell::new(crate::session::checkpoint::HunkTracker::new()),
         }
@@ -310,7 +305,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let agent = test_agent(server.uri());
-        let session = Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap();
+        let session = Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap();
         let (handle, actor) = spawn(agent, session, dir.path().to_path_buf());
 
         let local = tokio::task::LocalSet::new();
@@ -356,7 +351,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let agent = test_agent(server.uri());
-        let session = Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap();
+        let session = Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap();
         let old_id = session.id;
         let (handle, actor) = spawn(agent, session, dir.path().to_path_buf());
 

@@ -14,8 +14,7 @@
 pub mod checkpoint;
 pub mod log;
 
-use crate::api::{Message, ToolCall};
-use crate::config::Model;
+use edocrs_ai::{Message, Model, ToolCall};
 use crate::errors::SessionError;
 use checkpoint::Checkpoint;
 use chrono::{DateTime, Utc};
@@ -251,10 +250,10 @@ mod tests {
     #[test]
     fn new_then_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let s = Session::new(Model::deepseek_v4_flash(), dir.path()).unwrap();
+        let s = Session::new(crate::test_support::test_model(), dir.path()).unwrap();
         let back = Session::load(dir.path(), &s.id.to_string()).unwrap();
         assert_eq!(back.id, s.id);
-        assert_eq!(back.model, Model::deepseek_v4_flash());
+        assert_eq!(back.model, crate::test_support::test_model());
         assert!(back.messages.is_empty());
     }
 
@@ -262,7 +261,7 @@ mod tests {
     #[test]
     fn push_then_reload_preserves_messages() {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = Session::new(Model::deepseek_v4_flash(), dir.path()).unwrap();
+        let mut s = Session::new(crate::test_support::test_model(), dir.path()).unwrap();
         s.push_user("hi".into()).unwrap();
         s.push_assistant(Some("hello".into()), None, vec![]).unwrap();
 
@@ -283,7 +282,7 @@ mod tests {
     #[test]
     fn prompt_index_counts_turns() {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = Session::new(Model::deepseek_v4_flash(), dir.path()).unwrap();
+        let mut s = Session::new(crate::test_support::test_model(), dir.path()).unwrap();
         s.push_user("t1".into()).unwrap();
         s.push_assistant(Some("r1".into()), None, vec![]).unwrap();
         s.push_user("t2".into()).unwrap();
@@ -301,7 +300,7 @@ mod tests {
         let work = dir.path().join("work.txt");
         std::fs::write(&work, "v1\n").unwrap();
 
-        let mut s = Session::new(Model::deepseek_v4_flash(), dir.path()).unwrap();
+        let mut s = Session::new(crate::test_support::test_model(), dir.path()).unwrap();
         // 回合 1
         s.push_user("改文件".into()).unwrap();
         let mut ht = checkpoint::HunkTracker::new();
@@ -323,7 +322,7 @@ mod tests {
     #[test]
     fn fork_copies_history_with_new_id() {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = Session::new(Model::deepseek_v4_flash(), dir.path()).unwrap();
+        let mut s = Session::new(crate::test_support::test_model(), dir.path()).unwrap();
         s.push_user("hi".into()).unwrap();
         s.push_assistant(Some("hello".into()), None, vec![]).unwrap();
 
@@ -336,10 +335,10 @@ mod tests {
     #[tokio::test]
     async fn most_recent_id_picks_latest_mtime() {
         let dir = tempfile::tempdir().unwrap();
-        let s1 = Session::new(Model::deepseek_v4_flash(), dir.path()).unwrap();
+        let s1 = Session::new(crate::test_support::test_model(), dir.path()).unwrap();
         // 拉开 mtime。
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-        let s2 = Session::new(Model::deepseek_v4_flash(), dir.path()).unwrap();
+        let s2 = Session::new(crate::test_support::test_model(), dir.path()).unwrap();
         let id = Session::most_recent_id(dir.path()).await.unwrap().unwrap();
         assert_eq!(id, s2.id.to_string());
         assert_ne!(id, s1.id.to_string());

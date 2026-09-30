@@ -6,3 +6,22 @@ license.workspace = true
 description = "edoCRS model access: provider registry and OpenAI Chat Completions streaming"
 
 [dependencies]
+# HTTP + 流式
+# 学习点: 关掉 default-features 再只开 rustls-tls, 避免链接系统 OpenSSL (交叉编译 / 容器里省事)。
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+bytes = "1"
+futures-util = "0.3"
+async-stream = "0.3"
+# 只用到 time (退避 sleep / 空闲超时), 不需要 full。
+tokio = { version = "1", features = ["time"] }
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 错误
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"

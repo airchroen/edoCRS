@@ -14,8 +14,7 @@
 //!    push」小块拆成跨 await 的结构, 反而更易踩 RefCell 借用跨 await 的坑。grok-build
 //!    体量大用 async 日志, 我们学习项目取简单可靠的同步追加。
 
-use crate::api::{Message, ToolCall};
-use crate::config::Model;
+use edocrs_ai::{Message, Model, ToolCall};
 use crate::errors::SessionError;
 use crate::session::checkpoint::Checkpoint;
 use chrono::{DateTime, Utc};
@@ -124,7 +123,8 @@ pub fn replay(records: &[UpdateRecord]) -> Result<ReplayState, SessionError> {
     // ── 第 2 趟: 折叠 ──
     let mut id = Uuid::nil();
     let mut created_at = Utc::now();
-    let mut model = Model::default();
+    // 没有内置默认模型: 由 Meta 记录填充; 缺 Meta 时下面会报错, 占位值不会外泄。
+    let mut model = Model::new("unknown", "unknown");
     let mut messages = Vec::new();
     let mut prompt_index = 0u32;
     let mut checkpoints = Vec::new();
@@ -218,7 +218,7 @@ mod tests {
         UpdateRecord::Meta {
             id: Uuid::new_v4(),
             created_at: Utc::now(),
-            model: Model::deepseek_v4_flash(),
+            model: crate::test_support::test_model(),
         }
     }
 

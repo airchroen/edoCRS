@@ -1,15 +1,14 @@
-//! wire 消息类型 (OpenAI/DeepSeek chat_completions 兼容)。
+//! wire 消息类型 (OpenAI Chat Completions 兼容)。
 //!
-//! 本文件只保留「跨方言复用」的消息 domain 类型: `Message` / `ToolCall` / `FunctionCall`。
-//! SSE 切分、方言解析、HTTP client 已在子系统 4 迁到 `sampler/` 三层里 (见 sampler/mod.rs)。
+//! 这是 agent 与模型之间交换的「通用语」: `Message` / `ToolCall` / `FunctionCall`。
+//! 序列化形态严格对齐 Chat Completions 协议, 可直接塞进请求体的 `messages` 数组。
 //!
-//! ⚠️ 历史: 早期这里还有 `SseSplitter` / `StreamEvent` / `parse_chunk` / `ApiClient`。
-//!    三层 sampler 重构后, SSE 切分进了 `sampler/client.rs`, 解析进了
-//!    `sampler/dialect/chat_completions.rs`, 归一化事件变成 `sampler::SamplingEvent`。
+//! 学习点: 这些类型从二进制 crate 下沉到 `edocrs-ai` —— 因为「消息长什么样」是协议的一部分,
+//!         上层 (agent 循环、会话) 都依赖它, 放在最底层 crate 才不会出现循环依赖。
 
 use serde::{Deserialize, Serialize};
 
-/// OpenAI/DeepSeek 兼容的消息. role 字段由 #[serde(tag = "role")] 自动生成.
+/// Chat Completions 消息. role 字段由 #[serde(tag = "role")] 自动生成.
 ///
 /// 学习点: #[serde(tag = "role", rename_all = "snake_case")] 把 enum 变体名转换为 role
 ///         字段值 (User -> "user"). 这就是 internally tagged enum.
@@ -26,8 +25,10 @@ pub enum Message {
         /// 文本输出, 模型只调工具不说话时为 None.
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<String>,
-        /// DeepSeek thinking mode 返回的推理内容. 如果 assistant 同时产生 tool_calls,
-        /// 下一轮请求必须原样带回, 否则 API 会返回 400.
+        /// 可选兼容字段: 部分 provider (如 DeepSeek 的 thinking 模式) 在流里返回
+        /// `reasoning_content`。有则解析并在后续请求中原样回传 —— 有的 provider 要求
+        /// 带 tool_calls 的 assistant 消息必须回传它, 否则返回 400; 不认识它的 provider
+        /// 一般会忽略未知字段。
         #[serde(skip_serializing_if = "Option::is_none")]
         reasoning_content: Option<String>,
         /// 工具调用列表. 没有调用时为空 Vec, serde 会跳过该字段不输出.
@@ -44,7 +45,7 @@ pub enum Message {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
-    /// 始终是 "function" (DeepSeek/OpenAI 当前唯一的 type).
+    /// 始终是 "function" (Chat Completions 当前唯一的 type).
     /// 学习点: 我们用 #[serde(rename = "type")] 是因为 Rust 关键字 type 不能做字段名.
     #[serde(rename = "type")]
     pub kind: String,
@@ -55,7 +56,7 @@ pub struct ToolCall {
 pub struct FunctionCall {
     pub name: String,
     /// 参数原始 JSON 字符串 (注意: 不是 serde_json::Value, 而是字符串).
-    /// 学习点: OpenAI/DeepSeek 协议规定这里是字符串而非对象. 模型有时候输出非法 JSON,
+    /// 学习点: Chat Completions 协议规定这里是字符串而非对象. 模型有时候输出非法 JSON,
     ///         留给工具自行解析+报错, 比 serde 提前失败要更可控.
     pub arguments: String,
 }
@@ -94,7 +95,7 @@ mod tests {
         assert_eq!(v["tool_calls"][0]["function"]["name"], "read_file");
     }
 
-    /// DeepSeek thinking mode 要求 tool call 后继续请求时回传 assistant.reasoning_content.
+    /// 带推理的 provider 要求 tool call 后继续请求时回传 assistant.reasoning_content.
     #[test]
     fn assistant_message_preserves_reasoning_content() {
         let m = Message::Assistant {

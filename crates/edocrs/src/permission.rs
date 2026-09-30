@@ -2,14 +2,16 @@
 //!
 //! 设计 (见 spec §5):
 //! - read_file 不询问 (Tool::requires_permission 返回 false, agent.rs 不会调到这里).
-//! - write_file/bash 默认询问.
-//! - 用户可以选 'a' 在本会话内对该工具名「全允许」.
-//! - --yolo flag 全程跳过询问.
+//! - write_file/bash 默认询问 (`ask` 模式).
+//! - `auto-edit` 模式: 文件写入自动放行; **bash 永远询问**.
+//! - 用户可以选 'a' 在本会话内对该工具名「全允许」, 但 bash 不适用 (每条命令都值得看一眼).
+//! - 没有 yolo: 不存在「全程跳过询问」的开关.
 //!
 //! 事件化 (子系统 2): `check` 不再自己读 stdin, 而是经 `EventSink` 发一条
 //! `PermissionRequest` 事件, await 消费端 (REPL) 经 oneshot 回传的 Decision。
 //! 这样 gate 与终端 IO 解耦, 未来 TUI 客户端也能复用同一条路径。
 
+use crate::config::PermissionMode;
 use crate::event::EventSink;
 use std::collections::HashSet;
 
@@ -22,16 +24,16 @@ pub enum Decision {
 
 pub struct PermissionGate {
     always_allow: HashSet<String>,
-    yolo: bool,
+    mode: PermissionMode,
     /// 用于测试的预录答案队列. 生产代码请用默认 (空 Vec).
     test_answers: Vec<Decision>,
 }
 
 impl PermissionGate {
-    pub fn new(yolo: bool) -> Self {
+    pub fn new(mode: PermissionMode) -> Self {
         Self {
             always_allow: HashSet::new(),
-            yolo,
+            mode,
             test_answers: Vec::new(),
         }
     }
@@ -42,18 +44,18 @@ impl PermissionGate {
     pub fn with_test_answers(answers: Vec<Decision>) -> Self {
         Self {
             always_allow: HashSet::new(),
-            yolo: false,
+            mode: PermissionMode::Ask,
             test_answers: answers,
         }
     }
 
     /// 检查是否允许执行某工具.
     /// - 如果之前选过 AllowAll, 直接放行;
-    /// - 如果是 yolo 模式, 直接放行;
+    /// - auto-edit 模式下, 非 bash 工具 (文件写入) 直接放行;
     /// - 否则经 sink 发 PermissionRequest 事件, await 消费端答复 (生产)
     ///   或弹出预录答案 (测试).
     ///
-    /// 学习点: 签名变 async + 收 `&EventSink`。快路径 (yolo/always_allow/test) 不发事件,
+    /// 学习点: 签名变 async + 收 `&EventSink`。快路径 (auto-edit / always_allow / test) 不发事件,
     ///         也就不 await —— async fn 里不含 await 点时会立即完成, 零开销。
     pub async fn check(
         &mut self,
@@ -61,7 +63,11 @@ impl PermissionGate {
         args_preview: &str,
         sink: &EventSink,
     ) -> Decision {
-        if self.yolo || self.always_allow.contains(tool_name) {
+        // bash 永远走询问: 既不吃 auto-edit 的放行, 也不吃 always_allow 缓存。
+        let is_bash = tool_name == "bash";
+        if !is_bash
+            && (self.mode == PermissionMode::AutoEdit || self.always_allow.contains(tool_name))
+        {
             return Decision::Allow;
         }
         let d = if !self.test_answers.is_empty() {
@@ -72,7 +78,7 @@ impl PermissionGate {
                 .await
                 .unwrap_or(Decision::Deny)
         };
-        if d == Decision::AllowAll {
+        if d == Decision::AllowAll && !is_bash {
             self.always_allow.insert(tool_name.to_string());
         }
         d
@@ -88,11 +94,24 @@ mod tests {
         EventSink::new().0
     }
 
-    /// yolo 永远 Allow, 不动 always_allow 集合.
+    /// auto-edit 放行文件写入, 但 bash 仍然询问 (这里用预录 Deny 证明它确实被问了)。
     #[tokio::test]
-    async fn yolo_always_allows() {
-        let mut g = PermissionGate::new(true);
-        assert_eq!(g.check("bash", "ls", &dummy_sink()).await, Decision::Allow);
+    async fn auto_edit_allows_writes_but_still_asks_for_bash() {
+        let mut g = PermissionGate::new(PermissionMode::AutoEdit);
+        assert_eq!(g.check("write_file", "x", &dummy_sink()).await, Decision::Allow);
+
+        let mut g = PermissionGate::with_test_answers(vec![Decision::Deny]);
+        g.mode = PermissionMode::AutoEdit;
+        assert_eq!(g.check("bash", "ls", &dummy_sink()).await, Decision::Deny);
+    }
+
+    /// bash 选 'a' 也不缓存: 第二条命令仍要再问。
+    #[tokio::test]
+    async fn bash_allow_all_is_never_cached() {
+        let mut g = PermissionGate::with_test_answers(vec![Decision::AllowAll, Decision::Deny]);
+        let sink = dummy_sink();
+        assert_eq!(g.check("bash", "ls", &sink).await, Decision::AllowAll);
+        assert_eq!(g.check("bash", "rm -rf x", &sink).await, Decision::Deny);
     }
 
     /// allow-all 应该按工具名缓存.
@@ -101,9 +120,9 @@ mod tests {
     async fn allow_all_caches_per_tool_name() {
         let mut g = PermissionGate::with_test_answers(vec![Decision::AllowAll]);
         let sink = dummy_sink();
-        assert_eq!(g.check("bash", "ls -la", &sink).await, Decision::AllowAll);
+        assert_eq!(g.check("write_file", "a", &sink).await, Decision::AllowAll);
         // 第二次不再询问, 直接 Allow (注意是 Allow 而非 AllowAll, 因为缓存命中走快路径)
-        assert_eq!(g.check("bash", "rm -rf /tmp/x", &sink).await, Decision::Allow);
+        assert_eq!(g.check("write_file", "b", &sink).await, Decision::Allow);
     }
 
     /// allow-all 不能跨工具泄漏.
@@ -111,9 +130,9 @@ mod tests {
     async fn allow_all_does_not_leak_across_tools() {
         let mut g = PermissionGate::with_test_answers(vec![Decision::AllowAll, Decision::Deny]);
         let sink = dummy_sink();
-        g.check("bash", "ls", &sink).await;
-        // write_file 不在 allow 列表, 询问拿到 Deny
-        assert_eq!(g.check("write_file", "/tmp/x", &sink).await, Decision::Deny);
+        g.check("write_file", "a", &sink).await;
+        // 另一个工具不在 allow 列表, 询问拿到 Deny
+        assert_eq!(g.check("other_tool", "/tmp/x", &sink).await, Decision::Deny);
     }
 
     #[tokio::test]

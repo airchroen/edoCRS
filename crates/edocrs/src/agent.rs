@@ -14,11 +14,10 @@
 //! 本任务 (Task 17) 实现「空 tool_calls 单轮」happy path;
 //! Task 18 / 19 增加工具执行 / 权限 / 错误恢复.
 
-use crate::api::{FunctionCall, Message, ToolCall};
 use crate::errors::AppError;
 use crate::event::{EventSink, SessionEvent};
 use crate::permission::PermissionGate;
-use crate::sampler::{SamplerHandle, SamplingEvent, SamplingRequest};
+use edocrs_ai::{FunctionCall, Message, Sampler, SamplingEvent, SamplingRequest, ToolCall};
 use crate::session::checkpoint::HunkTracker;
 use crate::session::Session;
 use crate::tools::Registry;
@@ -27,7 +26,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 pub struct Agent {
-    pub sampler: SamplerHandle,
+    pub sampler: Sampler,
     pub registry: Registry,
     /// 权限门控.
     /// 学习点: actor 化后 run_turn 只借 `&self`, 但 gate.check 需要 `&mut self`
@@ -84,7 +83,7 @@ impl Agent {
                 .sample(SamplingRequest {
                     model,
                     messages: req_messages,
-                    tools_schema: self.registry.schemas(),
+                    tools: self.registry.schemas(),
                 })
                 .await?;
 
@@ -112,7 +111,9 @@ impl Agent {
                         if let Some(n) = name { entry.1 = n; }
                         entry.2.push_str(&arguments_fragment);
                     }
-                    SamplingEvent::Done { .. } => break,
+                    // 学习点: 不能在 Finish 时 break —— usage 在 finish_reason 之后的尾包里,
+                    //         读到流自然结束才不会丢。阶段 2 起这两个事件会被 agent 循环消费。
+                    SamplingEvent::Finish(_) | SamplingEvent::Usage(_) => {}
                 }
             }
             sink.emit(SessionEvent::StreamEnd);
@@ -251,7 +252,7 @@ fn git_head(dir: &std::path::Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Model;
+    use crate::test_support::{test_model, test_sampler};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -294,13 +295,13 @@ mod tests {
             .await;
 
         let agent = Agent {
-            sampler: crate::sampler::build("sk-test".into(), server.uri(), &Model::deepseek_v4_flash(), crate::sampler::SamplerConfig::default()),
+            sampler: test_sampler(server.uri()),
             registry: Registry::new(),
-            gate: RefCell::new(PermissionGate::new(false)),
+            gate: RefCell::new(PermissionGate::new(crate::config::PermissionMode::Ask)),
             working_dir: std::env::temp_dir(),
             hunk_tracker: RefCell::new(crate::session::checkpoint::HunkTracker::new()),
         };
-        let session = Rc::new(RefCell::new(Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap()));
+        let session = Rc::new(RefCell::new(Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap()));
         let (sink, rx) = EventSink::new();
         // 先跑完 turn (sink 全程存活), 再 drop sink 让通道关闭, 最后 drain rx。
         agent.run_turn(&session, "ping".into(), &sink).await.unwrap();
@@ -333,13 +334,13 @@ mod tests {
             .await;
 
         let agent = Agent {
-            sampler: crate::sampler::build("sk-test".into(), server.uri(), &Model::deepseek_v4_flash(), crate::sampler::SamplerConfig::default()),
+            sampler: test_sampler(server.uri()),
             registry: Registry::new(),
-            gate: RefCell::new(PermissionGate::new(false)),
+            gate: RefCell::new(PermissionGate::new(crate::config::PermissionMode::Ask)),
             working_dir: std::env::temp_dir(),
             hunk_tracker: RefCell::new(crate::session::checkpoint::HunkTracker::new()),
         };
-        let session = Rc::new(RefCell::new(Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap()));
+        let session = Rc::new(RefCell::new(Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap()));
         agent.run_turn(&session, "ping".into(), &EventSink::new().0).await.unwrap();
 
         assert_eq!(session.borrow().messages.len(), 2);
@@ -406,13 +407,13 @@ mod tests {
         registry.register(Box::new(ReadFile { max_bytes: 10_000 }));
 
         let agent = Agent {
-            sampler: crate::sampler::build("sk-test".into(), server.uri(), &Model::deepseek_v4_flash(), crate::sampler::SamplerConfig::default()),
+            sampler: test_sampler(server.uri()),
             registry,
-            gate: RefCell::new(PermissionGate::new(true)),
+            gate: RefCell::new(PermissionGate::new(crate::config::PermissionMode::Ask)),
             working_dir: std::env::temp_dir(),
             hunk_tracker: RefCell::new(crate::session::checkpoint::HunkTracker::new()),
         };
-        let session = Rc::new(RefCell::new(Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap()));
+        let session = Rc::new(RefCell::new(Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap()));
         agent.run_turn(&session, "请读这个文件".into(), &EventSink::new().0).await.unwrap();
 
         assert_eq!(session.borrow().messages.len(), 4);
@@ -454,16 +455,16 @@ mod tests {
             .await;
 
         let mut registry = Registry::new();
-        registry.register(Box::new(crate::tools::bash::Bash { max_bytes: 1000 }));
+        registry.register(Box::new(crate::tools::bash::Bash { max_bytes: 1000, default_timeout_secs: 30 }));
 
         let agent = Agent {
-            sampler: crate::sampler::build("sk-test".into(), server.uri(), &Model::deepseek_v4_flash(), crate::sampler::SamplerConfig::default()),
+            sampler: test_sampler(server.uri()),
             registry,
-            gate: RefCell::new(PermissionGate::new(true)),
+            gate: RefCell::new(PermissionGate::with_test_answers(vec![crate::permission::Decision::Allow])),
             working_dir: std::env::temp_dir(),
             hunk_tracker: RefCell::new(crate::session::checkpoint::HunkTracker::new()),
         };
-        let session = Rc::new(RefCell::new(Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap()));
+        let session = Rc::new(RefCell::new(Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap()));
         agent.run_turn(&session, "跑 echo x".into(), &EventSink::new().0).await.unwrap();
 
         let received = server.received_requests().await.expect("无法读取请求");
@@ -516,16 +517,16 @@ mod tests {
             .await;
 
         let mut registry = Registry::new();
-        registry.register(Box::new(crate::tools::bash::Bash { max_bytes: 1000 }));
+        registry.register(Box::new(crate::tools::bash::Bash { max_bytes: 1000, default_timeout_secs: 30 }));
 
         let agent = Agent {
-            sampler: crate::sampler::build("sk-test".into(), server.uri(), &Model::deepseek_v4_flash(), crate::sampler::SamplerConfig::default()),
+            sampler: test_sampler(server.uri()),
             registry,
             gate: RefCell::new(PermissionGate::with_test_answers(vec![crate::permission::Decision::Deny])),
             working_dir: std::env::temp_dir(),
             hunk_tracker: RefCell::new(crate::session::checkpoint::HunkTracker::new()),
         };
-        let session = Rc::new(RefCell::new(Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap()));
+        let session = Rc::new(RefCell::new(Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap()));
         agent.run_turn(&session, "跑 echo x".into(), &EventSink::new().0).await.unwrap();
 
         let tool_msg = session
@@ -574,13 +575,13 @@ mod tests {
         registry.register(Box::new(ReadFile { max_bytes: 1000 }));
 
         let agent = Agent {
-            sampler: crate::sampler::build("sk-test".into(), server.uri(), &Model::deepseek_v4_flash(), crate::sampler::SamplerConfig::default()),
+            sampler: test_sampler(server.uri()),
             registry,
-            gate: RefCell::new(PermissionGate::new(true)),
+            gate: RefCell::new(PermissionGate::new(crate::config::PermissionMode::Ask)),
             working_dir: std::env::temp_dir(),
             hunk_tracker: RefCell::new(crate::session::checkpoint::HunkTracker::new()),
         };
-        let session = Rc::new(RefCell::new(Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap()));
+        let session = Rc::new(RefCell::new(Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap()));
         agent.run_turn(&session, "读不存在的文件".into(), &EventSink::new().0).await.unwrap();
 
         let tool_msg = session
@@ -619,13 +620,13 @@ mod tests {
             .await;
 
         let agent = Agent {
-            sampler: crate::sampler::build("sk-test".into(), server.uri(), &Model::deepseek_v4_flash(), crate::sampler::SamplerConfig::default()),
+            sampler: test_sampler(server.uri()),
             registry: Registry::new(),
-            gate: RefCell::new(PermissionGate::new(false)),
+            gate: RefCell::new(PermissionGate::new(crate::config::PermissionMode::Ask)),
             working_dir: std::env::temp_dir(),
             hunk_tracker: RefCell::new(crate::session::checkpoint::HunkTracker::new()),
         };
-        let session = Rc::new(RefCell::new(Session::new(Model::deepseek_v4_flash(), tempfile::tempdir().unwrap().path()).unwrap()));
+        let session = Rc::new(RefCell::new(Session::new(test_model(), tempfile::tempdir().unwrap().path()).unwrap()));
         agent.run_turn(&session, "ping".into(), &EventSink::new().0).await.unwrap();
 
         // 1) 检查实际发出的请求体: messages[0].role == "system"
